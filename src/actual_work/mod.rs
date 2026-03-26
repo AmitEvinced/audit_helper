@@ -1,3 +1,4 @@
+use csv::Writer;
 use qdrant_client::qdrant::value::Kind;
 use qdrant_client::{
     self, Qdrant,
@@ -5,6 +6,7 @@ use qdrant_client::{
 };
 use reqwest;
 use serde_json::json;
+use std::fs::File;
 use std::process;
 use std::rc::Rc;
 
@@ -35,6 +37,7 @@ pub async fn get_closest(query: &str) -> Vec<String> {
         )
         .await;
 
+
     let result = match result {
         Err(e) => {
             println!("Error while searching for points {e}");
@@ -45,6 +48,7 @@ pub async fn get_closest(query: &str) -> Vec<String> {
 
     let mut vector_result: Vec<String> = Vec::new();
 
+    //extracting the resulst from qdrant into a vector of Strings for ease of use.
     let x = result.result.iter();
     for point in x {
         let payload = &point.payload;
@@ -57,21 +61,23 @@ pub async fn get_closest(query: &str) -> Vec<String> {
                 process::exit(1);
             }
         };
-        vector_result.push(data.clone());
+    
+        vector_result.push(data.to_string());
     }
-
+    // returning all of the validations found in qdrant db
     vector_result
 }
 
 pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String> {
-    let request = reqwest::Client::new();
+    let request = reqwest::Client::new(); //building client for reqwest
 
     let mut context_string: String = String::from("");
-    for val in context {
+    for val in context { //creating the string with out validations
         context_string += &val;
         context_string += "\n";
     }
 
+    //creating input for gemini
     let role_string = "you are acting as an accessibility engineer 
                     (Evinced-style). Given (A) an issue description and (B) a list of candidate validation 
                 rules from retrieval, decide which rule(s), if any, plausibly detect or cover this issue,
@@ -81,7 +87,7 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
 
     let context = "Here is a list of the possible validations: \n".to_string() + &context_string;
 
-    let body = json!({
+    let body = json!({ //building the body of the request to gemini
         "model": "models/gemini-3-flash-preview",
         "contents" : [
             {
@@ -103,7 +109,8 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
             {
                 "role" : "user",
                 "parts" : [{"text" : "Return format: a simple yes + validation name
-                if you decide that one of our validatons in a fit or None if they don't"}]
+                if you decide that one of our validatons in a fit or None if they don't.
+                if you think I need to decide menually, please mention that"}]
             }
         ]
         }
@@ -125,7 +132,7 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
         Ok(x) => x,
     };
 
-    let res: Result<serde_json::Value, reqwest::Error> = res.json().await;
+    let res: Result<serde_json::Value, reqwest::Error> = res.json().await; // getting the json out of the response
 
     let res: serde_json::Value = match res {
         Err(e) => {
@@ -165,7 +172,7 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
 }
 
 async fn vectorize_query(query: &str) -> Vec<f32> {
-    let gemini_client = reqwest::Client::new();
+    let gemini_client = reqwest::Client::new(); //creating gemini client 
 
     let body = json!({
         "model": "models/gemini-embedding-001",
@@ -191,6 +198,7 @@ async fn vectorize_query(query: &str) -> Vec<f32> {
         Ok(x) => x,
     };
 
+
     let res: serde_json::Value = res.json().await.expect("Could not get json"); // this can fail
 
     let res: &serde_json::Value = &res["embedding"]["values"]; // this can fail if api key does not work can return None
@@ -209,4 +217,56 @@ async fn vectorize_query(query: &str) -> Vec<f32> {
         .collect();
 
     res
+}
+
+// creating the cvs with the resutls
+pub async fn create_response_sheet(vector: Vec<String>) {
+    let mut counter = 0;
+    let wrt = Writer::from_path("../results.csv");
+    let mut wrt: Writer<File> = match wrt {
+        Err(e) => {
+            println!("Error creating csv  {e}");
+            process::exit(1);
+        }
+        Ok(x) => x,
+    };
+    //header row
+    let head_res = wrt.write_record(&["response"]);
+    match head_res {
+        Err(e) => {
+            println!("failed to create header row {e}");
+            process::exit(1);
+        }
+        Ok(()) => (),
+    }
+    //going over all of the issues
+    for issue in vector {
+        counter += 1;
+        let validations = get_closest(&issue).await;
+        let respose = qeury_to_gemini(&issue, validations).await;
+
+        let write_res = wrt.write_record(&[respose.as_str()]);
+        match write_res {
+            Err(e) => {
+                println!("Error creating row {e}");
+                continue;
+            }
+            Ok(()) => {
+                println!("created {counter}")
+            }
+        }
+        // I want to flush after each load, to not lose data in case of a failirue
+        let flush = wrt.flush();
+        match flush {
+            Err(e) => {
+                println!("could not flush writer for some reason {e}");
+                continue;
+            }
+            Ok(()) => (),
+        }
+        // just for testing to not overload api key
+        if counter == 3 {
+            break;
+        }
+    }
 }

@@ -9,12 +9,15 @@ use std::error::Error;
 use std::fs::File;
 use std::process;
 
+//proccessing the args
 pub fn validate_args(args: &Vec<String>) {
     if args.len() < 2 {
         println!("no path received");
         process::exit(1);
     }
 }
+
+//reading the csv 
 pub fn read_csv(path: &str) -> Reader<File> {
     let rdr = csv::Reader::from_path(path);
     match rdr {
@@ -46,9 +49,8 @@ pub fn create_validation_vectors(
     Ok(string_vec)
 }
 // creates any from index to content. each item is seperated by a line
-pub fn create_general_map(reader: &mut Reader<File>) -> HashMap<u32, String> {
-    let mut m = HashMap::new();
-    let mut counter: u32 = 0;
+pub fn create_general_vector(reader: &mut Reader<File>) -> Vec<String> {
+    let mut string_vec = Vec::new();
 
     for rec in reader.records() {
         let res = rec.expect("could not parse the string");
@@ -57,10 +59,10 @@ pub fn create_general_map(reader: &mut Reader<File>) -> HashMap<u32, String> {
             temp += item;
             temp += "\n";
         }
-        m.insert(counter, temp);
-        counter += 1;
+        
+        string_vec.push(temp);
     }
-    m
+    string_vec
 }
 
 //very long function. calls google to embbedd each validation. and because of limitations. we also
@@ -177,8 +179,8 @@ async fn upload_single_to_db(
                 "validation_data_set",
                 vec![PointStruct::new(
                     index,
-                    data.clone(),                    // must clone
-                    [("data", desc.clone().into())], // must clone
+                    data.clone(),                    // must clone but its fine becuase its a one time upload
+                    [("data", desc.clone().into())], // must clone but its fine becuase its a one time upload
                 )],
             )
             .wait(true),
