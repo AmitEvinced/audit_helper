@@ -1,19 +1,21 @@
 use csv::Reader;
-use qdrant_client::Qdrant;
-use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder};
-use qdrant_client::qdrant::{PointStruct, UpsertPointsBuilder};
 use reqwest;
 use serde_json::json;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::process;
+
 
 //proccessing the args
 #[allow(dead_code)]
 pub fn validate_args(args: &Vec<String>) {
     if args.len() < 2 {
-        println!("no path received");
+        eprintln!("no input path received for the audit");
+        process::exit(1);
+    }
+    
+    if args.len() < 3 { 
+        eprintln!("no output path recived");
         process::exit(1);
     }
 }
@@ -23,7 +25,7 @@ pub fn read_csv(path: &str) -> Reader<File> {
     let rdr = csv::Reader::from_path(path);
     match rdr {
         Err(e) => {
-            println!("Could not read the file. error is : {e}");
+            eprintln!("Could not read the file. error is : {e}");
             process::exit(1);
         }
         Ok(r) => r,
@@ -79,7 +81,7 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
     let string_vec = match string_vec {
         Ok(m) => m,
         Err(e) => {
-            println!("could not extract the map for some reason, {e}");
+            eprintln!("could not extract the map for some reason, {e}");
             process::exit(1);
         }
     };
@@ -93,7 +95,7 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
             "content": {
                 "parts" : [{"text": val}]
             },
-            "output_dimensionality": 768 // important for it to match to qdrant.
+            "output_dimensionality": 768 // important for it to match to the db.
         });
         //sending the request to google to get the embbedding for the current validation.
         let _key = std::env::var("GEMINI_API_KEY");
@@ -121,9 +123,9 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
             .collect();
 
         //uploading each vector
-        let a = upload_single_to_db(counter, &val, &res).await;
+        let a = upload_single_to_zilliz(counter, &val, &res).await;
         match a {
-            Err(e) => println!("error occurred while uploading {e}"),
+            Err(e) => eprintln!("error occurred while uploading {e}"),
             Ok(()) => (),
         }
         counter += 1;
@@ -132,85 +134,29 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[allow(dead_code)]
-// Use only once.
-pub async fn create_qdrant_db() {
-    //creating the qdrant client
-    let client = Qdrant::from_url(std::env::var("URL").unwrap().as_str())
-        .api_key(std::env::var("API_KEY").unwrap().as_str())
-        .build();
 
-    let client = match client {
-        Ok(x) => x,
-        Err(e) => {
-            println!("error connecting, {e}");
-            process::exit(1);
-        }
-    };
-    //creating the collection. vector size matches embbedding
-    let response = client
-        .create_collection(
-            CreateCollectionBuilder::new("validation_data_set")
-                .vectors_config(VectorParamsBuilder::new(768, Distance::Cosine)),
-        )
-        .await;
 
-    match response {
-        Ok(_x) => (),
-        Err(e) => {
-            println!("count not create collection {e}");
-            process::exit(1);
-        }
-    }
-}
+pub async fn upload_single_to_zilliz (index: u64, desc: &String, data: &Vec<f32>) -> Result<(), Box<dyn Error>> {
+    
+    let body = json!({
+        "collectionName": "Validations",
+        "data": [
+            {
+                "primary_key": index,
+                "Scaler": desc,
+                "vector":  data
+            }
+        ]
+    });
+    
+   let request = reqwest::Client::new();
+   request.post("https://in03-57cec7d9b982bd3.serverless.aws-eu-central-1.cloud.zilliz.com/v2/vectordb/entities/upsert")
+       .header("Authorization", "Bearer ".to_string() +&std::env::var("zilliz_api_key").unwrap())
+       .header("Content-Type", "application/json")
+       .json(&body)
+       .send()
+       .await?;
+    
 
-async fn upload_single_to_db(
-    index: u64,
-    desc: &String,
-    data: &Vec<f32>,
-) -> Result<(), Box<dyn Error>> {
-    // creating the Qdrant client
-    let client = Qdrant::from_url(std::env::var("URL").unwrap().as_str())
-        .api_key(std::env::var("API_KEY").unwrap().as_str())
-        .build()?;
-    client
-        .upsert_points(
-            // uploading the point
-            UpsertPointsBuilder::new(
-                "validation_data_set",
-                vec![PointStruct::new(
-                    index,
-                    data.clone(),                    // must clone but its fine becuase its a one time upload
-                    [("data", desc.clone().into())], // must clone but its fine becuase its a one time upload
-                )],
-            )
-            .wait(true),
-        )
-        .await?;
-
-    Ok(())
-}
-
-//can't use this function because api key is too fragile
-// this function bulk uploads the entire vector map to qdrant
-#[allow(dead_code)]
-pub async fn upload_vectors_to_db(map: HashMap<String, Vec<f32>>) -> Result<(), Box<dyn Error>> {
-    let client = Qdrant::from_url(std::env::var("URL").unwrap().as_str())
-        .api_key(std::env::var("API_KEY").unwrap().as_str())
-        .build()?;
-    let mut _counter: u64 = 0;
-    for (data, vector) in map {
-        client
-            .upsert_points(
-                UpsertPointsBuilder::new(
-                    "validation_data_set",
-                    vec![PointStruct::new(_counter, vector, [("data", data.into())])],
-                )
-                .wait(true),
-            )
-            .await?;
-
-        _counter += 1;
-    }
     Ok(())
 }

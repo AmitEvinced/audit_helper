@@ -1,77 +1,50 @@
 use csv::Writer;
-use qdrant_client::qdrant::value::Kind;
-use qdrant_client::{
-    self, Qdrant,
-    qdrant::{Query, QueryPointsBuilder},
-};
 use reqwest;
 use serde_json::json;
+use std::error::Error;
 use std::fs::File;
 use std::process;
 use std::rc::Rc;
 
-
-pub async fn get_closest(query: &str) -> Vec<String> {
-    // get the embedding
+pub async fn get_closest_zilliz(query: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let embbedded_vec = vectorize_query(query).await;
 
-    //establish qdrant conntection which can fail
-    let client = Qdrant::from_url(std::env::var("URL").unwrap().as_str())
-        .api_key(std::env::var("API_KEY"))
-        .build();
+    let body = json!({
+        "collectionName": "Validations",
+        "data": [embbedded_vec],
+        "annsField": "vector",
+        "limit": 3,
+        "outputFields": [
+            "*"
+        ]
+    });
 
-    let client = match client {
-        Err(e) => {
-            println!("Could not connect to qdrant {e}");
-            process::exit(1);
-        }
-        Ok(x) => x,
-    };
+    let request = reqwest::Client::new();
+    let res =request.post("https://in03-57cec7d9b982bd3.serverless.aws-eu-central-1.cloud.zilliz.com/v2/vectordb/entities/search")
+       .header("Authorization", "Bearer ".to_string() +&std::env::var("zilliz_api_key").unwrap())
+       .header("Content-Type", "application/json")
+       .json(&body)
+       .send()
+       .await?;
 
-    //qeury on the results
-    let result = client
-        .query(
-            QueryPointsBuilder::new("validation_data_set")
-                .query(Query::new_nearest(embbedded_vec))
-                .limit(3)
-                .with_payload(true),
-        )
-        .await;
+    let mut result_vec: Vec<String> = Vec::new();
+    let result: serde_json::Value = res.json().await?;
 
-
-    let result = match result {
-        Err(e) => {
-            println!("Error while searching for points {e}");
-            process::exit(1);
-        }
-        Ok(x) => x,
-    };
-
-    let mut vector_result: Vec<String> = Vec::new();
-
-    //extracting the resulst from qdrant into a vector of Strings for ease of use.
-    let x = result.result.iter();
-    for point in x {
-        let payload = &point.payload;
-        let data = payload.get("data").unwrap();
-        let kind = data.kind.as_ref();
-        let data = match kind {
-            Some(Kind::StringValue(s)) => s,
-            _ => {
-                println!("Could not extract the string");
-                process::exit(1);
+    if let Some(rows) = result["data"].as_array() {
+        for row in rows {
+            if let Some(text) = row["Scaler"].as_str() {
+                result_vec.push(text.to_string());
             }
-        };
-    
-        vector_result.push(data.to_string());
+        }
     }
-    // returning all of the validations found in qdrant db
-    vector_result
+
+    Ok(result_vec)
 }
 
 pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String> {
     let mut context_string: String = String::from("");
-    for val in context { //creating the string with out validations
+    for val in context {
+        //creating the string with out validations
         context_string += &val;
         context_string += "\n";
     }
@@ -82,7 +55,7 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
     let req = crate::clients_connection::connect_to_gemini_client(&body,"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent").await;
     let res = match req {
         Err(e) => {
-            println!("could not send request to google {e}");
+            eprintln!("could not send request to google {e}");
             process::exit(1);
         }
         Ok(x) => x,
@@ -92,14 +65,15 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
 
     let res: serde_json::Value = match res {
         Err(e) => {
-            println!("Error extracting the json out of the gemini request {e}");
+            eprintln!("Error extracting the json out of the gemini request {e}");
             process::exit(1);
         }
         Ok(x) => x,
     };
 
     if res.get("error").is_some() {
-        println!("we got an error code in the gemini request, try again");
+        eprintln!("we got an error code in the gemini request, try again");
+        println!("{:?}", res["error"]["message"].as_str());
         process::exit(1);
     }
 
@@ -114,7 +88,7 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
     let res = match res {
         Some(t) => t,
         None => {
-            println!("error while parsing the gemini response json. It should work so try again");
+            eprintln!("error while parsing the gemini response json. It should work so try again");
             process::exit(1);
         }
     };
@@ -128,26 +102,28 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
 }
 
 async fn vectorize_query(query: &str) -> Vec<f32> {
-
     let body = json!({
         "model": "models/gemini-embedding-001",
         "content": {
             "parts" : [{"text": query}]
         },
-        "output_dimensionality": 768 // important for it to match to qdrant.
+        "output_dimensionality": 768 // important for it to match to db.
     });
 
     //sending the request to google to get the embbedding for the current validation.
-    let req = crate::clients_connection::connect_to_gemini_client(&body,"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent").await;
+    let req = crate::clients_connection::connect_to_gemini_client(
+        &body,
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+    )
+    .await;
 
     let res = match req {
         Err(e) => {
-            println!("could not send request to google {e}");
+            eprintln!("could not send request to google {e}");
             process::exit(1);
         }
         Ok(x) => x,
     };
-
 
     let res: serde_json::Value = res.json().await.expect("Could not get json"); // this can fail
 
@@ -170,12 +146,12 @@ async fn vectorize_query(query: &str) -> Vec<f32> {
 }
 
 // creating the cvs with the resutls
-pub async fn create_response_sheet(vector: Vec<String>) {
+pub async fn create_response_sheet(vector: Vec<String>, out_put_path: &String) {
     let mut counter = 0;
-    let wrt = Writer::from_path("../results.csv");
+    let wrt = Writer::from_path(out_put_path);
     let mut wrt: Writer<File> = match wrt {
         Err(e) => {
-            println!("Error creating csv  {e}");
+            eprintln!("Error creating csv  {e}");
             process::exit(1);
         }
         Ok(x) => x,
@@ -184,7 +160,7 @@ pub async fn create_response_sheet(vector: Vec<String>) {
     let head_res = wrt.write_record(&["response"]);
     match head_res {
         Err(e) => {
-            println!("failed to create header row {e}");
+            eprintln!("failed to create header row {e}");
             process::exit(1);
         }
         Ok(()) => (),
@@ -192,13 +168,20 @@ pub async fn create_response_sheet(vector: Vec<String>) {
     //going over all of the issues
     for issue in vector {
         counter += 1;
-        let validations = get_closest(&issue).await;
+        let validations = get_closest_zilliz(&issue).await;
+        let validations = match validations {
+            Err(e) => {
+                println!("Error finding closests, {e}");
+                process::exit(1);
+            }
+            Ok(x) => x,
+        };
         let respose = qeury_to_gemini(&issue, validations).await;
 
         let write_res = wrt.write_record(&[respose.as_str()]);
         match write_res {
             Err(e) => {
-                println!("Error creating row {e}");
+                eprintln!("Error creating row {e}");
                 continue;
             }
             Ok(()) => {
@@ -209,13 +192,13 @@ pub async fn create_response_sheet(vector: Vec<String>) {
         let flush = wrt.flush();
         match flush {
             Err(e) => {
-                println!("could not flush writer for some reason {e}");
+                eprintln!("could not flush writer for some reason {e}");
                 continue;
             }
             Ok(()) => (),
         }
         // just for testing to not overload api key
-        if counter == 1 {
+        if counter == 3 {
             break;
         }
     }
