@@ -1,9 +1,11 @@
 mod actual_work;
 mod pre_process;
+mod clients_connection;
 
 use std::process;
-use std::env;
+//use std::env;
 use tokio;
+use std::io;
 
 #[tokio::main]
 async fn main() {
@@ -17,14 +19,21 @@ async fn main() {
         }
         _ => (),
     }
+
     //getting args
-    let args: Vec<String> = env::args().collect();
+    let mut path = String::new();
+    println!("please enter the file path");
+    io::stdin().read_line(&mut path).expect("did not enter a correct path");
+    let path = path.trim().to_string();
+    
+    /* let args: Vec<String> = env::args().collect();
     pre_process::validate_args(&args);
 
     let path = &args[1];
+    */
 
     //reading the file
-    let mut reader = pre_process::read_csv(path);
+    let mut reader = pre_process::read_csv(&path);
 
     //getting the map
     let issues_vector = pre_process::create_general_vector(&mut reader);

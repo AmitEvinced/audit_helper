@@ -10,6 +10,7 @@ use std::fs::File;
 use std::process;
 
 //proccessing the args
+#[allow(dead_code)]
 pub fn validate_args(args: &Vec<String>) {
     if args.len() < 2 {
         println!("no path received");

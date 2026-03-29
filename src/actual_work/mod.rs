@@ -10,6 +10,7 @@ use std::fs::File;
 use std::process;
 use std::rc::Rc;
 
+
 pub async fn get_closest(query: &str) -> Vec<String> {
     // get the embedding
     let embbedded_vec = vectorize_query(query).await;
@@ -57,7 +58,7 @@ pub async fn get_closest(query: &str) -> Vec<String> {
         let data = match kind {
             Some(Kind::StringValue(s)) => s,
             _ => {
-                println!("Couldnot extract the string");
+                println!("Could not extract the string");
                 process::exit(1);
             }
         };
@@ -69,61 +70,16 @@ pub async fn get_closest(query: &str) -> Vec<String> {
 }
 
 pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String> {
-    let request = reqwest::Client::new(); //building client for reqwest
-
     let mut context_string: String = String::from("");
     for val in context { //creating the string with out validations
         context_string += &val;
         context_string += "\n";
     }
 
-    //creating input for gemini
-    let role_string = "you are acting as an accessibility engineer 
-                    (Evinced-style). Given (A) an issue description and (B) a list of candidate validation 
-                rules from retrieval, decide which rule(s), if any, plausibly detect or cover this issue,
-                 and briefly why";
-
-    let description_string = "### Issue description \n".to_string() + &query;
-
-    let context = "Here is a list of the possible validations: \n".to_string() + &context_string;
-
-    let body = json!({ //building the body of the request to gemini
-        "model": "models/gemini-3-flash-preview",
-        "contents" : [
-            {
-                "role": "user",
-                "parts" :[{"text": role_string }]
-            },
-
-            {
-                "role": "user",
-                "parts" : [{"text": description_string}]
-            },
-
-            {
-                "role" : "user",
-                "parts" : [{"text" : context}]
-
-            },
-
-            {
-                "role" : "user",
-                "parts" : [{"text" : "Return format: a simple yes + validation name
-                if you decide that one of our validatons in a fit or None if they don't.
-                if you think I need to decide menually, please mention that"}]
-            }
-        ]
-        }
-    );
+    let body = crate::clients_connection::create_body(query, &context_string);
 
     //calling gemini
-    let req = request.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent")
-   .header("x-goog-api-key", std::env::var("GEMINI_API_KEY").unwrap())
-   .header("Content-Type", "application/json")
-   .json(&body)
-   .send()
-   .await;
-
+    let req = crate::clients_connection::connect_to_gemini_client(&body,"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent").await;
     let res = match req {
         Err(e) => {
             println!("could not send request to google {e}");
@@ -172,7 +128,6 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
 }
 
 async fn vectorize_query(query: &str) -> Vec<f32> {
-    let gemini_client = reqwest::Client::new(); //creating gemini client 
 
     let body = json!({
         "model": "models/gemini-embedding-001",
@@ -183,12 +138,7 @@ async fn vectorize_query(query: &str) -> Vec<f32> {
     });
 
     //sending the request to google to get the embbedding for the current validation.
-    let req = gemini_client.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent")
-        .header("x-goog-api-key", std::env::var("GEMINI_API_KEY").unwrap()) //add error handling later
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await;
+    let req = crate::clients_connection::connect_to_gemini_client(&body,"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent").await;
 
     let res = match req {
         Err(e) => {
@@ -265,7 +215,7 @@ pub async fn create_response_sheet(vector: Vec<String>) {
             Ok(()) => (),
         }
         // just for testing to not overload api key
-        if counter == 3 {
+        if counter == 1 {
             break;
         }
     }
