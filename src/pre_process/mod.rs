@@ -7,7 +7,6 @@ use std::process;
 
 
 //proccessing the args
-#[allow(dead_code)]
 pub fn validate_args(args: &Vec<String>) {
     if args.len() < 2 {
         eprintln!("no input path received for the audit");
@@ -71,7 +70,7 @@ pub fn create_general_vector(reader: &mut Reader<File>) -> Vec<String> {
 //very long function. calls google to embbedd each validation. and because of limitations. we also
 // upload each point one by one. to not use the api key too fast
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
     //reading the csv
     let mut reader = read_csv(path);
