@@ -1,13 +1,16 @@
 use csv::Writer;
+use dotenv;
 use reqwest;
 use serde_json::json;
-use std::error::Error;
-use std::fs::File;
-use std::process;
-use std::rc::Rc;
+use crate::ApiError;
 
-pub async fn get_closest_zilliz(query: &str) -> Result<Vec<String>, Box<dyn Error>> {
-    let embbedded_vec = vectorize_query(query).await;
+pub async fn get_closest_zilliz(query: &str) -> Result<Vec<String>, ApiError> {
+    dotenv::dotenv().ok();
+
+    let embbedded_vec = match vectorize_query(query).await {
+        Ok(a) => a,
+        Err(e) => return Err(e),
+    };
 
     let body = json!({
         "collectionName": "Validations",
@@ -25,10 +28,19 @@ pub async fn get_closest_zilliz(query: &str) -> Result<Vec<String>, Box<dyn Erro
        .header("Content-Type", "application/json")
        .json(&body)
        .send()
-       .await?;
+       .await;
+
+    let res = match res{
+        Ok(a) => a,
+        Err(e) => return Err(ApiError::InternalError(String::from("Could not get the matching vectors from zilliz ")+ e.to_string().as_str())),
+    };
 
     let mut result_vec: Vec<String> = Vec::new();
-    let result: serde_json::Value = res.json().await?;
+    let result: serde_json::Value = match res.json().await {
+        Ok(a) => a,
+        Err(e) => return Err(ApiError::InternalError(String::from("Could not get the json out of the zilliz response ")+ e.to_string().as_str())),
+    };
+
 
     if let Some(rows) = result["data"].as_array() {
         for row in rows {
@@ -41,7 +53,7 @@ pub async fn get_closest_zilliz(query: &str) -> Result<Vec<String>, Box<dyn Erro
     Ok(result_vec)
 }
 
-pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String> {
+pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Result<String, ApiError> {
     let mut context_string: String = String::from("");
     for val in context {
         //creating the string with out validations
@@ -55,9 +67,11 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
     let req = crate::clients_connection::connect_to_gemini_client(&body,"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent").await;
     let res = match req {
         Err(e) => {
-            eprintln!("could not send request to google {e}");
-            process::exit(1);
+            return Err(ApiError::InternalError(
+                "could not send request to google ".to_string() + e.to_string().as_str(),
+            ));
         }
+
         Ok(x) => x,
     };
 
@@ -65,16 +79,19 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
 
     let res: serde_json::Value = match res {
         Err(e) => {
-            eprintln!("Error extracting the json out of the gemini request {e}");
-            process::exit(1);
+            return Err(ApiError::InternalError(
+                String::from("Error extracting the json out of the gemini request ")
+                    + e.to_string().as_str(),
+            ));
         }
         Ok(x) => x,
     };
 
     if res.get("error").is_some() {
-        eprintln!("we got an error code in the gemini request, try again");
-        println!("{:?}", res["error"]["message"].as_str());
-        process::exit(1);
+        return Err(ApiError::InternalError(
+            String::from("we got an error code in the gemini request, try again")
+                + res["error"]["message"].as_str().unwrap(),
+        ));
     }
 
     //extracting the values out of the json response
@@ -88,20 +105,24 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Rc<String>
     let res = match res {
         Some(t) => t,
         None => {
-            eprintln!("error while parsing the gemini response json. It should work so try again");
-            process::exit(1);
+            return Err(ApiError::InternalError(String::from(
+                "error while parsing the gemini response json. It should work so try again",
+            )));
         }
     };
 
-    // must use Rc if we want to return a String
-    let res: Rc<String> = match res {
-        serde_json::Value::String(a) => Rc::new(a.to_string()),
-        _ => process::exit(1),
+    let res: String = match res {
+        serde_json::Value::String(a) => a.to_string(),
+        _ => {
+            return Err(ApiError::InternalError(String::from(
+                "failed to get the gemini result",
+            )));
+        }
     };
-    res
+    Ok(res)
 }
 
-async fn vectorize_query(query: &str) -> Vec<f32> {
+async fn vectorize_query(query: &str) -> Result<Vec<f32>, ApiError> {
     let body = json!({
         "model": "models/gemini-embedding-001",
         "content": {
@@ -119,19 +140,23 @@ async fn vectorize_query(query: &str) -> Vec<f32> {
 
     let res = match req {
         Err(e) => {
-            eprintln!("could not send request to google {e}");
-            process::exit(1);
+            return Err(ApiError::InternalError(
+                String::from("could not send request to google ") + e.to_string().as_str(),
+            ));
         }
         Ok(x) => x,
     };
 
-    let res: serde_json::Value = res.json().await.expect("Could not get json"); // this can fail
+    let res = res.json().await;
+    let res: serde_json::Value = match res {
+        Ok(r) => r,
+        Err(e) => return Err(ApiError::InternalError(String::from("Could not get the json out of the emmbedding result ".to_string() + e.to_string().as_str()))),
+    };
 
     let res: &serde_json::Value = &res["embedding"]["values"]; // this can fail if api key does not work can return None
 
     if let None = res.as_array() {
-        print!("Error parsing the the embbedded vector, probably ai studio is down");
-        process::exit(1);
+        return Err(ApiError::InternalError(String::from("Error parsing the the embbedded vector, probably ai studio is down")));
     }
 
     //extracting the vector out
@@ -142,43 +167,44 @@ async fn vectorize_query(query: &str) -> Vec<f32> {
         .map(|x| x as f32)
         .collect();
 
-    res
+    Ok(res)
 }
 
 // creating the cvs with the resutls
-pub async fn create_response_sheet(vector: Vec<String>, out_put_path: &String) {
+pub async fn create_response_sheet(
+    vector: Vec<String>,
+    out_put_path: &String,
+) -> Result<(), ApiError> {
     let mut counter = 0;
     let wrt = Writer::from_path(out_put_path);
-    let mut wrt: Writer<File> = match wrt {
-        Err(e) => {
-            eprintln!("Error creating csv  {e}");
-            process::exit(1);
-        }
-        Ok(x) => x,
+    let mut wrt = match wrt {
+        Ok(w) => w,
+        Err(e) => return Err(ApiError::InternalError(e.to_string())),
     };
+
     //header row
     let head_res = wrt.write_record(&["response"]);
-    match head_res {
-        Err(e) => {
-            eprintln!("failed to create header row {e}");
-            process::exit(1);
-        }
-        Ok(()) => (),
-    }
+    let _head_res = match head_res {
+        Ok(_) => (),
+        Err(e) => return Err(ApiError::InternalError(e.to_string())),
+    };
+
     //going over all of the issues
     for issue in vector {
         counter += 1;
         let validations = get_closest_zilliz(&issue).await;
         let validations = match validations {
-            Err(e) => {
-                println!("Error finding closests, {e}");
-                process::exit(1);
-            }
             Ok(x) => x,
+            Err(e) => return Err(e),
         };
-        let respose = qeury_to_gemini(&issue, validations).await;
 
-        let write_res = wrt.write_record(&[respose.as_str()]);
+        let response = qeury_to_gemini(&issue, validations).await;
+        let response: String = match response {
+            Ok(r) => r,
+            Err(e) => return Err(e),
+        };
+
+        let write_res = wrt.write_record(&[response.as_str()]);
         match write_res {
             Err(e) => {
                 eprintln!("Error creating row {e}");
@@ -202,4 +228,5 @@ pub async fn create_response_sheet(vector: Vec<String>, out_put_path: &String) {
             break;
         }
     }
+    Ok(())
 }

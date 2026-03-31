@@ -3,7 +3,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::error::Error;
 
-pub async fn connect_to_gemini_client(body: &Value, embedd_url: &str) -> Result<reqwest::Response, Box<dyn Error>> {
+pub async fn connect_to_gemini_client(body: &Value, embedd_url: &str) -> Result<reqwest::Response, Box<dyn Error + Send + Sync>> {
     let request = reqwest::Client::new(); //building client for reqwest
     let req = request.post(embedd_url)
    .header("x-goog-api-key", std::env::var("GEMINI_API_KEY").unwrap())
