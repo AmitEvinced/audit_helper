@@ -7,8 +7,9 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use serde_json::json;
 //use std::env;
-use tokio;
 use audit_agent::ApiError;
+
+#[warn(clippy::pedantic)]
 
 #[tokio::main]
 async fn main() {

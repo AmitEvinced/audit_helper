@@ -1,5 +1,4 @@
 use csv::Reader;
-use reqwest;
 use serde_json::json;
 use std::error::Error;
 use std::fs::File;
@@ -10,7 +9,7 @@ use crate::ApiError;
 
 //proccessing the args
 #[expect(dead_code)]
-pub fn validate_args(args: &Vec<String>) {
+pub fn validate_args(args: &[String]) {
     if args.len() < 2 {
         eprintln!("no input path received for the audit");
         process::exit(1);
@@ -87,8 +86,7 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
     };
     // creating the gemini client via reqwest.
     let gemini_client = reqwest::Client::new();
-    let mut counter: u64 = 0;
-    for val in string_vec  {
+    for (counter, val) in (0_u64..).zip(string_vec.into_iter()){
         println!("{val}");
         let body = json!({
             "model": "models/gemini-embedding-001",
@@ -109,7 +107,7 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
         let res: serde_json::Value = req.json().await?; // this can fail
         let res: &serde_json::Value = &res["embedding"]["values"]; // this can fail if api key does not work can return None
 
-        if let None = res.as_array() {
+        if res.as_array().is_none() {
             print!("Error parsing the the embbedded vector, probably ai studio is down");
             process::exit(1);
         }
@@ -124,11 +122,9 @@ pub async fn upload_embeddings_to_db(path: &str) -> Result<(), Box<dyn Error>> {
 
         //uploading each vector
         let a = upload_single_to_zilliz(counter, &val, &res).await;
-        match a {
-            Err(e) => eprintln!("error occurred while uploading {e}"),
-            Ok(()) => (),
-        }
-        counter += 1;
+        if let Err(e) = a {
+            eprintln!("error occurred while uploading {e}");
+        } 
     }
 
     Ok(())

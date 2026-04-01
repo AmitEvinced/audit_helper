@@ -1,4 +1,3 @@
-use reqwest;
 use serde_json::Value;
 use serde_json::json;
 use std::error::Error;
@@ -15,7 +14,7 @@ pub async fn connect_to_gemini_client(body: &Value, embedd_url: &str) -> Result<
     Ok(req)
 }
 
-pub fn create_body(query: &String, context_string: &String) -> Value {
+pub fn create_body(query: &str, context_string: &str) -> Value {
 
     //creating input for gemini
     let role_string = "you are acting as an accessibility engineer 

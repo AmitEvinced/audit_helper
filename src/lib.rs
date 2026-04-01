@@ -7,7 +7,7 @@ use serde_json::json;
 use axum::Json;
 use reqwest::StatusCode;
 
-pub async fn run_audit(input_path: &String, output_path: &String) -> Result<(), ApiError>{
+pub async fn run_audit(input_path: &str, output_path: &str) -> Result<(), ApiError>{
         //reading the file
     let reader = pre_process::read_csv(input_path);
     let mut reader = match reader {
@@ -32,7 +32,7 @@ pub async fn run_audit(input_path: &String, output_path: &String) -> Result<(), 
         Err(e) => return Err(e),
     }
 
-    
+
     
     Ok(())
 }

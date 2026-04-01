@@ -1,6 +1,4 @@
 use csv::Writer;
-use dotenv;
-use reqwest;
 use serde_json::json;
 use crate::ApiError;
 
@@ -53,7 +51,7 @@ pub async fn get_closest_zilliz(query: &str) -> Result<Vec<String>, ApiError> {
     Ok(result_vec)
 }
 
-pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Result<String, ApiError> {
+pub async fn qeury_to_gemini(query: &str, context: Vec<String>) -> Result<String, ApiError> {
     let mut context_string: String = String::from("");
     for val in context {
         //creating the string with out validations
@@ -89,7 +87,7 @@ pub async fn qeury_to_gemini(query: &String, context: Vec<String>) -> Result<Str
 
     if res.get("error").is_some() {
         return Err(ApiError::InternalError(
-            String::from("we got an error code in the gemini request, try again")
+            String::from("we got an error code in the gemini request, try again ")
                 + res["error"]["message"].as_str().unwrap(),
         ));
     }
@@ -150,12 +148,12 @@ async fn vectorize_query(query: &str) -> Result<Vec<f32>, ApiError> {
     let res = res.json().await;
     let res: serde_json::Value = match res {
         Ok(r) => r,
-        Err(e) => return Err(ApiError::InternalError(String::from("Could not get the json out of the emmbedding result ".to_string() + e.to_string().as_str()))),
+        Err(e) => return Err(ApiError::InternalError(String::from("Could not get the json out of the emmbedding result ") + e.to_string().as_str())),
     };
 
     let res: &serde_json::Value = &res["embedding"]["values"]; // this can fail if api key does not work can return None
 
-    if let None = res.as_array() {
+    if res.as_array().is_none() {
         return Err(ApiError::InternalError(String::from("Error parsing the the embbedded vector, probably ai studio is down")));
     }
 
@@ -173,7 +171,7 @@ async fn vectorize_query(query: &str) -> Result<Vec<f32>, ApiError> {
 // creating the cvs with the resutls
 pub async fn create_response_sheet(
     vector: Vec<String>,
-    out_put_path: &String,
+    out_put_path: &str,
 ) -> Result<(), ApiError> {
     let mut counter = 0;
     let wrt = Writer::from_path(out_put_path);
@@ -183,10 +181,9 @@ pub async fn create_response_sheet(
     };
 
     //header row
-    let head_res = wrt.write_record(&["response"]);
-    let _head_res = match head_res {
-        Ok(_) => (),
-        Err(e) => return Err(ApiError::InternalError(e.to_string())),
+    let head_res = wrt.write_record(["response"]);
+    if let Err(e) = head_res {
+        return Err(ApiError::InternalError(e.to_string()));
     };
 
     //going over all of the issues
@@ -204,7 +201,7 @@ pub async fn create_response_sheet(
             Err(e) => return Err(e),
         };
 
-        let write_res = wrt.write_record(&[response.as_str()]);
+        let write_res = wrt.write_record([response.as_str()]);
         match write_res {
             Err(e) => {
                 eprintln!("Error creating row {e}");
@@ -216,13 +213,11 @@ pub async fn create_response_sheet(
         }
         // I want to flush after each load, to not lose data in case of a failirue
         let flush = wrt.flush();
-        match flush {
-            Err(e) => {
-                eprintln!("could not flush writer for some reason {e}");
-                continue;
-            }
-            Ok(()) => (),
+        if let Err(e) = flush {
+            eprintln!("could not flush writer for some reason {e}");
+            continue;
         }
+        
         // just for testing to not overload api key
         if counter == 3 {
             break;
